@@ -1,0 +1,243 @@
+{
+  "summary": {
+    "architecture_score": 41,
+    "maintainability_score": 38,
+    "scalability_score": 43,
+    "performance_score": 46,
+    "technical_debt_score": 72,
+    "total_findings": 10,
+    "critical": 1,
+    "high": 4,
+    "medium": 4,
+    "low": 1
+  },
+  "findings": [
+    {
+      "id": "ARC-001",
+      "title": "Cross-app domain leakage and weak bounded contexts",
+      "severity": "High",
+      "type": "Architecture Problem",
+      "affected_files": [
+        "order/services.py",
+        "payment/services/service.py",
+        "analytics/services.py",
+        "notifications/services.py"
+      ],
+      "snippet": "OrderService.create_order(...) triggers notifications and payment side effects indirectly; PaymentService mutates Order/Inventory/Earnings.",
+      "why": "Core order, payment, analytics, and notification domains are tightly coupled via direct model/service calls, creating ripple effects and high change risk.",
+      "consequence": "Small payment-flow changes can break order/inventory logic, reducing release safety and team parallelism.",
+      "refactor": "Introduce domain events (OrderCreated, PaymentSettled, OrderDelivered) and asynchronous handlers; isolate write models per app boundary.",
+      "example": "Publish event in order app; subscribers in payment/analytics/notifications consume event with idempotency keys.",
+      "impact": "High: reduces regression blast radius and enables scale-out ownership."
+    },
+    {
+      "id": "ARC-002",
+      "title": "Fat API views containing orchestration/business rules",
+      "severity": "High",
+      "type": "Refactor Opportunity",
+      "affected_files": [
+        "payment/views.py",
+        "order/views.py",
+        "supliers/views.py",
+        "marketer/views.py"
+      ],
+      "snippet": "APIView methods perform validation, querying, state transitions, and response shaping in one layer.",
+      "why": "Violates separation of concerns; hard to test deterministically; duplicates validation logic between views/services/serializers.",
+      "consequence": "Higher defect rate, inconsistent behavior across endpoints, expensive maintenance.",
+      "refactor": "Adopt use-case/application service layer + thin DRF views; serializers for I/O only, services for workflows.",
+      "example": "class CreateOrderUseCase.execute(command) -> DTO; view only maps request/response.",
+      "impact": "High: testability and maintainability improve materially."
+    },
+    {
+      "id": "ARC-003",
+      "title": "Multitenancy access model is inconsistent across apps",
+      "severity": "Critical",
+      "type": "Logic Error",
+      "affected_files": [
+        "shop/views.py",
+        "catalog/views.py",
+        "inventory/views.py",
+        "account/views.py"
+      ],
+      "snippet": "queryset = Shop.objects.all(); queryset = Product.objects.all(); queryset = Inventory.objects.all()",
+      "why": "Object-level ownership filters are missing/uneven, while platform is multi-vendor.",
+      "consequence": "Cross-tenant reads/writes and data corruption risk.",
+      "refactor": "Introduce shared tenant-aware mixins/permissions and mandatory get_queryset ownership filters.",
+      "example": "class OwnerScopedQuerysetMixin: def get_queryset(self): return super().get_queryset().filter(shop__owner=self.request.user)",
+      "impact": "Critical: protects core data integrity and compliance."
+    },
+    {
+      "id": "ARC-004",
+      "title": "State machine rules distributed and partially duplicated",
+      "severity": "High",
+      "type": "Maintainability Issue",
+      "affected_files": [
+        "order/services.py",
+        "payment/services/service.py",
+        "payment/views.py",
+        "payment/signals.py"
+      ],
+      "snippet": "Order status and payment status transitions are enforced in multiple places with partially overlapping checks.",
+      "why": "Transition invariants are not centralized in a single state machine.",
+      "consequence": "Impossible states and drift during feature additions (refund/cancel/deliver race paths).",
+      "refactor": "Create explicit transition policy module with allowed transitions + guard conditions and audit logging.",
+      "example": "OrderStateMachine.transition(order, target, actor, context)",
+      "impact": "High: fewer lifecycle bugs in payments/orders."
+    },
+    {
+      "id": "ARC-005",
+      "title": "Potential N+1 and heavy in-memory aggregation in dashboards",
+      "severity": "Medium",
+      "type": "Performance Issue",
+      "affected_files": [
+        "supliers/views.py",
+        "order/views.py",
+        "hub/views.py"
+      ],
+      "snippet": "Looping through items/orders and computing totals in Python after broad queryset materialization.",
+      "why": "Loads large datasets into memory; repeated related-object accesses can explode query count under scale.",
+      "consequence": "Slow dashboards and higher DB/API latency at production volume.",
+      "refactor": "Push aggregation to DB using annotate/Sum/Case, paginate result sets, and precompute daily facts.",
+      "example": "OrderItem.objects.filter(...).values(...).annotate(total=Sum(F('price')*F('quantity')))",
+      "impact": "Medium-high performance gain at scale."
+    },
+    {
+      "id": "ARC-006",
+      "title": "Repository-level configuration drift and environment mismatch",
+      "severity": "Medium",
+      "type": "Scalability Risk",
+      "affected_files": [
+        "core/settings.py",
+        "requirements.txt"
+      ],
+      "snippet": "SQLite default in settings while platform context implies PostgreSQL production; requirements encoding malformed.",
+      "why": "Local/prod behavior diverges; tooling (linters/scanners) can fail on malformed dependency file.",
+      "consequence": "Hard-to-reproduce bugs and unstable CI/CD quality gates.",
+      "refactor": "Use env-driven DB config with explicit prod profiles; normalize requirements to UTF-8 and lock with hashes.",
+      "example": "DATABASE_URL parsing + separate settings modules (base/dev/prod).",
+      "impact": "Medium: improved deployment reliability."
+    },
+    {
+      "id": "ARC-007",
+      "title": "Service naming and module layout inconsistency",
+      "severity": "Low",
+      "type": "Maintainability Issue",
+      "affected_files": [
+        "supliers/*",
+        "payment/services/service.py",
+        "catalog/services.py"
+      ],
+      "snippet": "Misspelled app name `supliers`, generic file names (`service.py`), mixed conventions.",
+      "why": "Inconsistent naming impairs discoverability and onboarding.",
+      "consequence": "Higher cognitive load and accidental import mistakes.",
+      "refactor": "Rename modules to intent-revealing names (payout_service.py, order_checkout_service.py) and fix app naming.",
+      "example": "payment/services/payouts.py, payment/services/reconciliation.py",
+      "impact": "Low-medium ongoing productivity benefit."
+    },
+    {
+      "id": "ARC-008",
+      "title": "Transaction boundaries not uniformly aligned with side effects",
+      "severity": "High",
+      "type": "Logic Error",
+      "affected_files": [
+        "order/services.py",
+        "payment/views.py",
+        "payment/signals.py",
+        "notifications/services.py"
+      ],
+      "snippet": "DB writes and external effects (payment gateway, notifications) can occur without outbox pattern.",
+      "why": "Failure between DB commit and external call causes inconsistent external/internal state.",
+      "consequence": "Ghost notifications, duplicate payouts, reconciliation mismatches.",
+      "refactor": "Use transactional outbox + worker processing for external IO; ensure idempotent consumers.",
+      "example": "Store outbox_event within atomic transaction, Celery worker dispatches reliably.",
+      "impact": "High operational reliability uplift."
+    },
+    {
+      "id": "ARC-009",
+      "title": "Serializer responsibilities are mixed with domain defaults",
+      "severity": "Medium",
+      "type": "Refactor Opportunity",
+      "affected_files": [
+        "account/serializers.py",
+        "shop/serializers.py",
+        "payment/serializers.py"
+      ],
+      "snippet": "create() methods assign roles and defaults; validation duplicates model/business invariants.",
+      "why": "Domain rules in serializers complicate reuse outside HTTP and create hidden coupling.",
+      "consequence": "Inconsistent behavior in management commands, tests, and future async workflows.",
+      "refactor": "Move domain invariants to services/model methods; keep serializer for schema validation only.",
+      "example": "UserRegistrationService.register_supplier(payload)",
+      "impact": "Medium maintainability/testability gain."
+    },
+    {
+      "id": "ARC-010",
+      "title": "Insufficient pagination/filter standards across list endpoints",
+      "severity": "Medium",
+      "type": "Scalability Risk",
+      "affected_files": [
+        "catalog/views.py",
+        "notifications/views.py",
+        "marketer/views.py",
+        "hub/views.py"
+      ],
+      "snippet": "Several list endpoints return full result sets without pagination controls.",
+      "why": "Unbounded responses increase DB load, memory, and network costs.",
+      "consequence": "Latency spikes and API instability under high cardinality datasets.",
+      "refactor": "Adopt global pagination policy + filter backends + max page size.",
+      "example": "REST_FRAMEWORK['DEFAULT_PAGINATION_CLASS']='rest_framework.pagination.PageNumberPagination'",
+      "impact": "Medium-high at growth stage."
+    }
+  ],
+  "app_quality": [
+    {
+      "app": "account",
+      "score": 40,
+      "notes": "Auth flows functional but authorization boundaries weak."
+    },
+    {
+      "app": "order",
+      "score": 44,
+      "notes": "Good stock locking intent; view/business coupling remains high."
+    },
+    {
+      "app": "payment",
+      "score": 39,
+      "notes": "Rich service logic but too much cross-domain responsibility."
+    },
+    {
+      "app": "inventory",
+      "score": 47,
+      "notes": "Basic structure clean; tenant scoping incomplete."
+    },
+    {
+      "app": "catalog",
+      "score": 45,
+      "notes": "Ranking service useful; CRUD permission scoping weak."
+    },
+    {
+      "app": "shop",
+      "score": 42,
+      "notes": "Theme settings flow okay; ownership filters absent."
+    },
+    {
+      "app": "supliers",
+      "score": 43,
+      "notes": "Domain useful; naming inconsistency and heavy loops."
+    },
+    {
+      "app": "marketer",
+      "score": 48,
+      "notes": "Role checks present; query/pagination consistency needed."
+    },
+    {
+      "app": "analytics",
+      "score": 50,
+      "notes": "Atomic updates are good; coupling to order/payment remains."
+    },
+    {
+      "app": "hub",
+      "score": 46,
+      "notes": "Feed logic sizable; needs query budget controls."
+    }
+  ]
+}

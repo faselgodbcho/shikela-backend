@@ -1,0 +1,163 @@
+{
+  "summary": {
+    "total_findings": 10,
+    "critical": 4,
+    "high": 4,
+    "medium": 2,
+    "low": 0,
+    "info": 2,
+    "security_score": 38
+  },
+  "findings": [
+    {
+      "id": "SHK-001",
+      "title": "Hardcoded Django secret key and SantimPay private key in source",
+      "severity": "Critical",
+      "affected_files": [
+        "core/settings.py"
+      ],
+      "snippet": "SECRET_KEY = \"django-insecure-...\"\nSANTIMPAY_PRIVATE_KEY = _normalize_pem(os.getenv(..., '''-----BEGIN EC PRIVATE KEY-----...'''))",
+      "why": "Cryptographic secrets are committed in source control, enabling key theft and token/signature forgery.",
+      "impact": "Account/session compromise, payment signature forgery, and total environment compromise if reused across envs.",
+      "scenario": "An attacker with repo read access uses leaked private key to sign malicious SantimPay requests and impersonate trusted payment operations.",
+      "fix": "Move all secrets to environment/secret manager; fail fast if missing; rotate leaked keys immediately.",
+      "secure_example": "SECRET_KEY = os.environ['DJANGO_SECRET_KEY']\nSANTIMPAY_PRIVATE_KEY = _normalize_pem(os.environ['SANTIMPAY_PRIVATE_KEY'])"
+    },
+    {
+      "id": "SHK-002",
+      "title": "Insecure production defaults (DEBUG=True, ALLOWED_HOSTS empty, missing secure headers)",
+      "severity": "High",
+      "affected_files": [
+        "core/settings.py"
+      ],
+      "snippet": "DEBUG = True\nALLOWED_HOSTS = []",
+      "why": "Debug mode and weak host/origin hardening expose stack traces and weaken host header protections.",
+      "impact": "Information disclosure, easier exploit development, cache poisoning/host-header abuse in misconfigured deployments.",
+      "scenario": "A production deployment forgets env overrides; attacker triggers errors to harvest secrets/config and internal paths.",
+      "fix": "Default to secure production posture with DEBUG=False, strict ALLOWED_HOSTS/CSRF_TRUSTED_ORIGINS/CORS allowlist and HSTS/security headers.",
+      "secure_example": "DEBUG = os.getenv('DEBUG','false').lower()=='true'\nif not DEBUG:\n    SECURE_HSTS_SECONDS=31536000\n    SESSION_COOKIE_SECURE=True\n    CSRF_COOKIE_SECURE=True"
+    },
+    {
+      "id": "SHK-003",
+      "title": "Broken object-level authorization on user profile endpoint",
+      "severity": "Critical",
+      "affected_files": [
+        "account/views.py"
+      ],
+      "snippet": "class UserDetailView(RetrieveUpdateDestroyAPIView):\n    queryset = User.objects.all()",
+      "why": "No object-level permission checks ensure users can access only their own record.",
+      "impact": "IDOR allows viewing/updating/deleting arbitrary user accounts.",
+      "scenario": "Authenticated user requests /auth/user/<other-user-uuid>/ and edits victim profile or deletes account.",
+      "fix": "Restrict queryset to request.user or enforce IsSelfOrAdmin permission class.",
+      "secure_example": "def get_queryset(self):\n    return User.objects.filter(id=self.request.user.id)"
+    },
+    {
+      "id": "SHK-004",
+      "title": "Authentication missing on critical order endpoints",
+      "severity": "Critical",
+      "affected_files": [
+        "order/views.py"
+      ],
+      "snippet": "class BuyNowView(APIView):\n    def post(...):\nclass CheckoutCartView(APIView):\n    def post(...):\nclass ListOrdersView(APIView):\n    def get(...):",
+      "why": "Views omit permission_classes, so API defaults may be bypassed/misapplied and business logic uses request.user directly.",
+      "impact": "Unauthorized order creation, cart checkout misuse, and data exposure if unauthenticated requests pass through with AnonymousUser edge cases.",
+      "scenario": "Attacker hits /order/create/ without token to stress order creation path and probe logic flaws; with middleware drift this becomes full auth bypass.",
+      "fix": "Explicitly set permission_classes=[IsAuthenticated] and validate authenticated user type before processing.",
+      "secure_example": "class BuyNowView(APIView):\n    permission_classes=[permissions.IsAuthenticated]"
+    },
+    {
+      "id": "SHK-005",
+      "title": "Global data exposure due to missing ownership filters in CRUD endpoints",
+      "severity": "Critical",
+      "affected_files": [
+        "shop/views.py",
+        "inventory/views.py",
+        "catalog/views.py"
+      ],
+      "snippet": "queryset = Shop.objects.all()\nqueryset = Inventory.objects...all()\nqueryset = Product.objects.all()",
+      "why": "List/detail/update/delete endpoints use unrestricted querysets with only IsAuthenticated, enabling cross-tenant read/write.",
+      "impact": "Multi-tenant isolation break: vendors can read/modify other vendors' shops, inventory, and products.",
+      "scenario": "Shop owner updates another shop by ID through ShopDetailView PATCH.",
+      "fix": "Filter by tenant ownership in get_queryset and enforce per-object permission checks.",
+      "secure_example": "def get_queryset(self):\n    return Shop.objects.filter(owner=self.request.user)"
+    },
+    {
+      "id": "SHK-006",
+      "title": "Unvalidated user-supplied notify_url in payment initiation (SSRF/webhook hijack)",
+      "severity": "High",
+      "affected_files": [
+        "payment/views.py",
+        "payment/services/service.py"
+      ],
+      "snippet": "notify_url = request.data.get('notify_url')\n... service.direct_payment(... notify_url=notify_url ...)",
+      "why": "User-controlled callback URL is forwarded to payment provider without allowlisting.",
+      "impact": "SSRF-like callback abuse, exfiltration of transaction events to attacker-controlled endpoints, reconciliation tampering.",
+      "scenario": "Attacker sets notify_url to malicious endpoint and receives sensitive payment lifecycle callbacks.",
+      "fix": "Do not accept notify_url from client; use server-side configured callback or strict allowlist.",
+      "secure_example": "notify_url = settings.SANTIMPAY_NOTIFY_URL"
+    },
+    {
+      "id": "SHK-007",
+      "title": "Unsafe file upload controls missing (type/content scanning and size limits)",
+      "severity": "High",
+      "affected_files": [
+        "account/models.py",
+        "catalog/models.py",
+        "shop/models.py",
+        "hub/models.py"
+      ],
+      "snippet": "FileField(upload_to='licenses/')\nFileField(upload_to='products/media/')\nImageField(upload_to='...')",
+      "why": "No validators for extension/MIME/size or malware scanning pipeline are enforced.",
+      "impact": "Malicious file upload, storage abuse, possible XSS/content-sniffing issues when served, and legal/security risk.",
+      "scenario": "Attacker uploads polyglot HTML/SVG payload as product media and shares link for stored-XSS in weakly configured file serving.",
+      "fix": "Add strict file validators, max size, antivirus scanning, and safe content-disposition in media serving.",
+      "secure_example": "file = models.FileField(upload_to='products/media/', validators=[FileExtensionValidator(['jpg','png','pdf']), validate_file_size])"
+    },
+    {
+      "id": "SHK-008",
+      "title": "No API throttling/rate-limiting on auth and transactional endpoints",
+      "severity": "High",
+      "affected_files": [
+        "core/settings.py",
+        "account/views.py",
+        "payment/views.py",
+        "order/views.py"
+      ],
+      "snippet": "REST_FRAMEWORK = { ... }  # no DEFAULT_THROTTLE_*",
+      "why": "Missing throttle classes enables brute-force/login abuse and high-volume transaction abuse.",
+      "impact": "Credential stuffing, OTP/email abuse, DoS and fraud automation.",
+      "scenario": "Botnet sends massive login and payment-init requests without per-IP/user limits.",
+      "fix": "Enable DRF throttles plus edge rate-limits (Nginx/WAF/API gateway).",
+      "secure_example": "REST_FRAMEWORK['DEFAULT_THROTTLE_CLASSES']=['rest_framework.throttling.UserRateThrottle','rest_framework.throttling.AnonRateThrottle']"
+    },
+    {
+      "id": "SHK-009",
+      "title": "Dependency/runtime misconfiguration risk: Django 6.0 pin likely incompatible",
+      "severity": "Medium",
+      "affected_files": [
+        "requirements.txt"
+      ],
+      "snippet": "Django==6.0.2",
+      "why": "Pinned version may be unreleased/incompatible with project assumptions; also requirements file appears UTF-16 encoded, harming tooling/scanners.",
+      "impact": "Broken deployments, missed vulnerability scanning, undefined runtime behavior.",
+      "scenario": "CI security scanner skips malformed requirements and misses vulnerable packages.",
+      "fix": "Use UTF-8 requirements, pin verified compatible versions, and run pip-audit/safety in CI.",
+      "secure_example": "Django==5.1.*  # or tested LTS\n# file encoded UTF-8"
+    },
+    {
+      "id": "SHK-010",
+      "title": "Payment/refund business-logic race windows need stronger idempotency and locking",
+      "severity": "Medium",
+      "affected_files": [
+        "payment/views.py",
+        "payment/services/service.py"
+      ],
+      "snippet": "Refund.objects.create(... status=REQUESTED ...)\nupdate_or_create(order=order, user=request.user, provider='SANTIMPAY', ...)",
+      "why": "Concurrent requests can create duplicate operational states without idempotency keys and select_for_update on critical rows.",
+      "impact": "Double-processing, inconsistent payout/refund accounting, financial reconciliation issues.",
+      "scenario": "Client retries quickly during timeout; two refund requests pass validation before status updates settle.",
+      "fix": "Introduce idempotency keys, unique constraints for active requests, and row-level locking around financial transitions.",
+      "secure_example": "with transaction.atomic():\n    payment = Payment.objects.select_for_update().get(id=payment_id)"
+    }
+  ]
+}

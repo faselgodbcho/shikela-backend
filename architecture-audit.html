@@ -1,0 +1,10 @@
+<!doctype html>
+<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>Shikela Architecture Audit</title><link rel='stylesheet' href='architecture-audit.css'></head>
+<body><aside><h1>Architecture Audit</h1><a href='#exec'>Executive</a><a href='#apps'>Apps</a><a href='#findings'>Findings</a><a href='#debt'>Tech Debt</a></aside>
+<main>
+<section id='exec'><h2>Executive Summary</h2><div class='grid' id='scoreCards'></div><canvas id='scores' width='700' height='260'></canvas></section>
+<section id='apps'><h2>App-by-App Quality</h2><div id='appsTable'></div></section>
+<section><h2>Filters</h2><input id='q' placeholder='Search findings'><select id='sev'><option value=''>All severities</option><option>Critical</option><option>High</option><option>Medium</option><option>Low</option></select><select id='type'><option value=''>All types</option><option>Logic Error</option><option>Architecture Problem</option><option>Refactor Opportunity</option><option>Performance Issue</option><option>Maintainability Issue</option><option>Scalability Risk</option></select></section>
+<section id='findings'><h2>Detailed Findings</h2><div id='list'></div></section>
+<section id='debt'><h2>Dependency/Coupling View</h2><p>Current architecture has strong coupling across <code>order</code> ↔ <code>payment</code> ↔ <code>analytics</code> ↔ <code>notifications</code>. Recommended target: event-driven edges via outbox.</p></section>
+</main><script src='architecture-audit.js'></script></body></html>
